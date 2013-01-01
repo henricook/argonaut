@@ -12,42 +12,60 @@ object JsonParser {
   sealed case class TokenStreamElement(element: JSONToken, next: () => TokenStream) extends TokenStream
   case object TokenStreamEnd extends TokenStream
 
+  case class Parser[+A](run: TokenStream => ValidationNEL[String, (TokenStream, A)]) {
+    def map[B](f: A => B): Parser[B] =
+      flatMap(a => Parser.value(f(a)))
+
+    def flatMap[B](f: A => Parser[B]): Parser[B] =
+      Parser(t => run(t).flatMap({ case (tt, a) => f(a).run(tt) }))
+  }
+
+  object Parser {
+    def value[A](a: => A): Parser[A] =
+      Parser(t => (t, a).successNel)
+
+    implicit def ParserMonad: Monad[Parser] = new Monad[Parser] {
+      def point[A](a: => A) = Parser.value(a)
+      def bind[A, B](a: Parser[A])(f: A => Parser[B]) = a flatMap f
+    }
+  }
+
   sealed abstract class JSONToken {
     def originalStringContent: String
   }
   sealed abstract class OpenToken extends JSONToken
   sealed abstract class CloseToken extends JSONToken
-  case object ArrayOpenToken extends OpenToken { 
+  case object ArrayOpenToken extends OpenToken {
     final val originalStringContent = "["
   }
-  case object ArrayCloseToken extends CloseToken { 
+  case object ArrayCloseToken extends CloseToken {
     final val originalStringContent = "]"
   }
-  case object ObjectOpenToken extends OpenToken { 
-    final val originalStringContent = "{" 
+  case object ObjectOpenToken extends OpenToken {
+    final val originalStringContent = "{"
   }
-  case object ObjectCloseToken extends CloseToken { 
-    final val originalStringContent = "}" 
+  case object ObjectCloseToken extends CloseToken {
+    final val originalStringContent = "}"
   }
-  case object EntrySeparatorToken extends JSONToken { 
-    final val originalStringContent = "," 
+  case object EntrySeparatorToken extends JSONToken {
+    final val originalStringContent = ","
   }
-  case object FieldSeparatorToken extends JSONToken { 
-    final val originalStringContent = ":" 
+  case object FieldSeparatorToken extends JSONToken {
+    final val originalStringContent = ":"
   }
-  case object StringBoundsToken extends OpenToken { 
-    final val originalStringContent = "\"" 
+  case object StringBoundsToken extends OpenToken {
+    final val originalStringContent = "\""
   }
   case class NumberToken(originalStringContent: String) extends JSONToken
   sealed abstract class BooleanToken extends JSONToken
-  case object BooleanTrueToken extends BooleanToken { 
-    final val originalStringContent = "true" 
+  case object BooleanTrueToken extends BooleanToken {
+    final val originalStringContent = "true"
   }
-  case object BooleanFalseToken extends BooleanToken { 
-    final val originalStringContent = "false" 
+  case object BooleanFalseToken extends BooleanToken {
+    final val originalStringContent = "false"
   }
-  case object NullToken extends JSONToken { 
-    final val originalStringContent = "null" 
+  case object NullToken extends JSONToken {
+    final val originalStringContent = "null"
   }
   sealed abstract class StringPartToken extends JSONToken {
     def appendToBuilder(builder: StringBuilder): StringBuilder
@@ -69,14 +87,14 @@ object JsonParser {
       """\\""" -> EscapedCharacterToken("""\\""", """\"""),
       """\/""" -> EscapedCharacterToken("""\/""", """/"""),
       "\\\"" -> EscapedCharacterToken("\\\"", "\"")
-    ) 
+    )
   }
 
   sealed case class NormalStringToken(originalStringContent: String) extends StringPartToken {
     final def appendToBuilder(builder: StringBuilder) = builder.append(originalStringContent)
   }
   sealed case class UnexpectedContentToken(originalStringContent: String) extends JSONToken
-  
+
   private[this] def excerpt(string: String, limit: Int = 50): String = {
     if (string.size > limit) {
       string.take(limit) + "..."
@@ -113,7 +131,7 @@ object JsonParser {
       case _ => "%s but found: %s".format(failMessage, excerpt(stream)).failNel
     }
   }
-  
+
   private[this] final def expectStringBounds(stream: TokenStream) = expectedSpacerToken(stream, StringBoundsToken, "Expected string bounds")
 
   private[this] final def expectArrayOpen(stream: TokenStream) = expectedSpacerToken(stream, ArrayOpenToken, "Expected array open token")
@@ -127,7 +145,7 @@ object JsonParser {
   private[this] final def expectEntrySeparator(stream: TokenStream) = expectedSpacerToken(stream, EntrySeparatorToken, "Expected entry separator token")
 
   private[this] final def expectFieldSeparator(stream: TokenStream) = expectedSpacerToken(stream, FieldSeparatorToken, "Expected field separator token")
-  
+
   // Note the mutable collection type in the parameters.
   @tailrec
   private[this] final def expectObject(stream: TokenStream, first: Boolean = true, fields: Builder[(JsonField, Json), List[(JsonField, Json)]] = List.newBuilder): ValidationNEL[String, (TokenStream, JObject)] = {
@@ -147,7 +165,7 @@ object JsonParser {
       }
     }
   }
- 
+
   // Note the mutable collection type in the parameters.
   @tailrec
   private[this] final def expectArray(stream: TokenStream, first: Boolean = true, fields: Builder[Json, List[Json]] = List.newBuilder): ValidationNEL[String, (TokenStream, JArray)] = {
@@ -166,8 +184,8 @@ object JsonParser {
     }
   }
 
-  private[this] final def expectValue(stream: TokenStream): ValidationNEL[String, (TokenStream, Json)] = {
-    stream match {
+  private[this] final def expectValuep(stream: TokenStream): Parser[Json] =
+    Parser(stream => stream match {
       case TokenStreamElement(ArrayOpenToken, next) => expectArray(next())
       case TokenStreamElement(ObjectOpenToken, next) => expectObject(next())
       case TokenStreamElement(StringBoundsToken, next) => expectStringNoStartBounds(next())
@@ -183,8 +201,27 @@ object JsonParser {
       case TokenStreamElement(UnexpectedContentToken(excerpt), _) => "Unexpected content found: %s".format(excerpt).failNel
       case TokenStreamElement(unexpectedToken, _) => "Unexpected content found: %s".format(excerpt(stream)).failNel
       case TokenStreamEnd => "JSON terminates unexpectedly".failNel
-    }
-  }
+    })
+
+
+  private[this] final def expectValue(stream: TokenStream): ValidationNEL[String, (TokenStream, Json)] =
+      stream match {
+        case TokenStreamElement(ArrayOpenToken, next) => expectArray(next())
+        case TokenStreamElement(ObjectOpenToken, next) => expectObject(next())
+        case TokenStreamElement(StringBoundsToken, next) => expectStringNoStartBounds(next())
+        case TokenStreamElement(BooleanTrueToken, tail) => (tail(), JBool(true)).successNel
+        case TokenStreamElement(BooleanFalseToken, tail) => (tail(), JBool(false)).successNel
+        case TokenStreamElement(NullToken, tail) => (tail(), JNull).successNel
+        case TokenStreamElement(NumberToken(numberText), tail) => {
+          numberText
+            .parseDouble
+            .fold(nfe => "Value [%s] cannot be parsed into a number.".format(numberText).failNel,
+                  doubleValue => (tail(), JNumber(JsonNumber(doubleValue))).successNel)
+        }
+        case TokenStreamElement(UnexpectedContentToken(excerpt), _) => "Unexpected content found: %s".format(excerpt).failNel
+        case TokenStreamElement(unexpectedToken, _) => "Unexpected content found: %s".format(excerpt(stream)).failNel
+        case TokenStreamEnd => "JSON terminates unexpectedly".failNel
+      }
 
   private[this] final def expectString(stream: TokenStream): ValidationNEL[String, (TokenStream, JString)] = {
     for {
@@ -255,7 +292,7 @@ object JsonParser {
       }
     }
   }
-  
+
   final def tokenize(json: String): TokenStream = {
     json.headOption match {
       case Some('[') => TokenStreamElement(ArrayOpenToken, () => tokenize(json.tail))
