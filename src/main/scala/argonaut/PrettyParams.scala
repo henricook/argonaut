@@ -72,68 +72,68 @@ sealed trait PrettyParams {
    * Returns a string representation of a pretty-printed JSON value.
    */
   def pretty(j: Json): String = {
-    import Json._
-    import StringEscaping._
+    def pretty_(j: Json, x: List[String]): List[String] = {
+      import Json._
+      import StringEscaping._
 
-    def appendJsonString(jsonString: JsonString, stringBuilder: StringBuilder): StringBuilder = {
-      jsonString
-        .foldLeft(stringBuilder.append(stringEnclosureText))((builder, string) => builder.append(escape(string)))
-        .append(stringEnclosureText)
-    }
-    def trav(depth: Int, k: Json, stringBuilder: StringBuilder): StringBuilder = {
-      def lbraceAppend(stringBuilder: StringBuilder): StringBuilder = {
-         lbraceLeft(depth).append(stringBuilder).append(openBraceText) |> lbraceRight(depth + 1).append
-      }
-      def rbraceAppend(stringBuilder: StringBuilder): StringBuilder = {
-        rbraceLeft(depth + 1).append(stringBuilder).append(closeBraceText) |> rbraceRight(depth).append
-      }
-      def lbracketAppend(stringBuilder: StringBuilder): StringBuilder = {
-        lbracketLeft(depth).append(stringBuilder).append(openArrayText) |> lbracketRight(depth + 1).append
-      }
-      def rbracketAppend(stringBuilder: StringBuilder): StringBuilder = {
-        rbracketLeft(depth + 1).append(stringBuilder).append(closeArrayText) |> rbracketRight(depth).append
-      }
-      def commaAppend(stringBuilder: StringBuilder): StringBuilder = {
-        commaLeft(depth + 1).append(stringBuilder).append(commaText) |>commaRight(depth + 1).append
-      }
-      def colonAppend(stringBuilder: StringBuilder): StringBuilder = {
-        colonLeft(depth + 1).append(stringBuilder).append(colonText) |> colonRight(depth + 1).append
+      @inline def str(s: JsonString): String = {
+        val sb = new StringBuilder(s.length * 2)
+        sb.append(stringEnclosureText)
+        s.foreach({
+          case '\\' => sb.append("\\\\")
+          case '"' => sb.append("\\\"")
+          case '\b' => sb.append("\\b")
+          case '\f' => sb.append("\\f")
+          case '\n' => sb.append("\\n")
+          case '\r' => sb.append("\\r")
+          case '\t' => sb.append("\\t")
+          case possibleUnicode if Character.isISOControl(possibleUnicode) =>
+            sb.append("\\u%04x".format(possibleUnicode.toInt))
+          case c => sb.append(c)
+        })
+        sb.append(stringEnclosureText)
+        sb.toString
       }
 
-      k.fold(
-        stringBuilder.append(nullText)
-        , bool => stringBuilder.append(bool ? trueText | falseText)
-        , n => stringBuilder.append(n.shows)
-        , s => appendJsonString(s, stringBuilder)
-        , e => {
-          val arrayAppends: List[StringBuilder => StringBuilder] = e.toList.map{elem => (builder: StringBuilder) =>
-            trav(depth + 1, elem, builder)
+      @inline def pair(p: (JsonString, Json), xx: List[String]) = p match {
+        case (k, v) => pretty_(v, commaText :: str(k) :: xx)
+      }
+
+      j match {
+        case JNull => nullText :: x
+        case JBool(true) => trueText :: x
+        case JBool(false) => falseText :: x
+        case JNumber(n) => n.shows :: x
+        case JString(s) => str(s) :: x
+        case JArray(Nil) =>
+          closeArrayText :: openArrayText :: x
+        case JArray(h :: t) =>
+          closeArrayText :: t.foldLeft(pretty_(h, openArrayText :: x))((acc, v) =>
+            pretty_(v, commaText :: acc))
+        case JObject(o) =>
+          o.toList match {
+            case Nil => closeBraceText :: openBraceText :: x
+            case h :: t =>
+              closeBraceText :: t.foldLeft(pair(h, openBraceText :: x))((acc, v) =>
+                pair(v, commaText :: acc))
           }
-          arrayAppends.intersperse(commaAppend).foldLeft(lbracketAppend(stringBuilder))((builder, elem) => elem(builder)) |> rbracketAppend
-        }
-        , o => {
-          val associationAppends: List[StringBuilder => StringBuilder] = o.toList.map{assoc => (builder: StringBuilder) =>
-            val innerAppend = (b: StringBuilder) => trav(depth + 1, assoc._2, b)
-            appendJsonString(assoc._1, builder) |> colonAppend |> innerAppend
-          }
-          associationAppends.intersperse(commaAppend).foldLeft(lbraceAppend(stringBuilder))((builder, elem) => elem(builder)) |> rbraceAppend
-        }
-      )
+      }
     }
 
-    trav(0, j, new StringBuilder()).toString()
+    pretty_(j, Nil).reverse.mkString
   }
 
-  private[this] final val openBraceText = '{'
-  private[this] final val closeBraceText = '}'
-  private[this] final val openArrayText = '['
-  private[this] final val closeArrayText = ']'
-  private[this] final val commaText = ','
-  private[this] final val colonText = ':'
+  private[this] final val openBraceText = "{"
+  private[this] final val closeBraceText = "}"
+  private[this] final val openArrayText = "["
+  private[this] final val closeArrayText = "]"
+  private[this] final val commaText = ","
+  private[this] final val colonText = ":"
   private[this] final val nullText = "null"
   private[this] final val trueText = "true"
   private[this] final val falseText = "false"
   private[this] final val stringEnclosureText = "\""
+
 
   /**
    * Returns a `Vector[Char]` representation of a pretty-printed JSON value.
@@ -151,9 +151,10 @@ object StringEscaping {
       case '\n' => "\\n"
       case '\r' => "\\r"
       case '\t' => "\\t"
-      case possibleUnicode if possibleUnicode.isControl => "\\u%04x".format(possibleUnicode.toInt)
+      case possibleUnicode if Character.isISOControl(possibleUnicode) => "\\u%04x".format(possibleUnicode.toInt)
       case _ => c.toString
     }
+
 }
 
 object PrettyParams extends PrettyParamss {
