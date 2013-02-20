@@ -76,27 +76,11 @@ sealed trait PrettyParams {
       import Json._
       import StringEscaping._
 
-      @inline def str(s: JsonString): String = {
-        val sb = new StringBuilder(s.length * 2)
-        sb.append(stringEnclosureText)
-        s.foreach({
-          case '\\' => sb.append("\\\\")
-          case '"' => sb.append("\\\"")
-          case '\b' => sb.append("\\b")
-          case '\f' => sb.append("\\f")
-          case '\n' => sb.append("\\n")
-          case '\r' => sb.append("\\r")
-          case '\t' => sb.append("\\t")
-          case possibleUnicode if Character.isISOControl(possibleUnicode) =>
-            sb.append("\\u%04x".format(possibleUnicode.toInt))
-          case c => sb.append(c)
-        })
-        sb.append(stringEnclosureText)
-        sb.toString
-      }
+      @inline def str(s: JsonString, xx: List[String]): List[String] =
+        stringEnclosureText :: s.flatMap(escape) :: stringEnclosureText :: xx
 
       @inline def pair(p: (JsonString, Json), xx: List[String]) = p match {
-        case (k, v) => pretty_(v, commaText :: str(k) :: xx)
+        case (k, v) => pretty_(v, commaText :: str(k, xx))
       }
 
       j match {
@@ -104,7 +88,7 @@ sealed trait PrettyParams {
         case JBool(true) => trueText :: x
         case JBool(false) => falseText :: x
         case JNumber(n) => n.shows :: x
-        case JString(s) => str(s) :: x
+        case JString(s) => str(s, x)
         case JArray(Nil) =>
           closeArrayText :: openArrayText :: x
         case JArray(h :: t) =>
