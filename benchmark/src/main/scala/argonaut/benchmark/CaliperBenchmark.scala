@@ -11,7 +11,7 @@ import com.fasterxml.jackson.core.{TreeNode, JsonFactory => JacksonJsonFactory}
 // Stolen conveniently from
 // https://github.com/sirthias/scala-benchmarking-template/blob/master/src/main/scala/org/example/SimpleScalaBenchmark.scala.
 trait SimpleScalaBenchmark extends SimpleBenchmark {
-  
+
   // helper method to keep the actual benchmarking methods a bit cleaner
   // your code snippet should always return a value that cannot be "optimized away"
   def repeat[@specialized A](reps: Int)(snippet: => A) = {
@@ -19,8 +19,8 @@ trait SimpleScalaBenchmark extends SimpleBenchmark {
     var i = 0
     var result = zero
     while (i < reps) {
-      val res = snippet 
-      if (res != zero) result = res // make result depend on the benchmarking snippet result 
+      val res = snippet
+      if (res != zero) result = res // make result depend on the benchmarking snippet result
       i = i + 1
     }
     result
@@ -51,11 +51,37 @@ object CaliperScalaUtilJSONBenchmarkRunner {
   }
 }
 
+object CaliperPrintBenchmarkRunner {
+  def main(args: Array[String]) {
+    Runner.main(classOf[CaliperPrintBenchmark], args)
+  }
+}
+
+class CaliperPrintBenchmark extends SimpleScalaBenchmark {
+  lazy val df = new java.text.DecimalFormat("#")
+
+  def x5000 = (0 to 5000).toList.map(_.toDouble)
+
+  def timeDoubleToString(n: Int) = repeat(n)({
+    x5000.foldLeft("")((_, v) => v.toString)
+  })
+  def timeDoubleToLongToString(n: Int) = repeat(n)({
+    x5000.toList.map(_.toDouble).foldLeft("")((_, v) => v.toLong.toString)
+  })
+  def timeDoubleStringFormat(n: Int) = repeat(n)({
+    x5000.toList.map(_.toDouble).foldLeft("")((_, v) => "0.0f".format(v))
+  })
+  def timeDoubleDecimalFormat(n: Int) = repeat(n)({
+    x5000.toList.map(_.toDouble).foldLeft("")((_, v) => df.format(v))
+  })
+
+}
+
 
 case class CaliperArgonautBenchmark() extends CaliperBenchmark {
   override def repeatParse(json: String, reps: Int): Unit = repeat(reps)(json.parse)
   val jsonToPrint = Data.apachebuilds.parseOption.get
-  val smallJsonToPrint = jSingleObject("array", jArray(List(jNumber(5), jTrue, jFalse)))
+  val smallJsonToPrint = jSingleObject("array", jArray(List(jNumberOrNull(5), jTrue, jFalse)))
   def timesmallnospaces(reps: Int) = repeat(reps){
     smallJsonToPrint.nospaces.length
   }
